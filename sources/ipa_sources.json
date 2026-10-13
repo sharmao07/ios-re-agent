@@ -1,0 +1,56 @@
+{
+  "schema_version": "1.0",
+  "description": "Outbound discovery directory. This project does not host or mirror IPA binaries.",
+  "sources": [
+    {
+      "id": "github-ipa-release-search",
+      "name": "GitHub repository search for IPA projects",
+      "url": "https://github.com/search?q=ipa+in%3Aname%2Cdescription&type=repositories",
+      "kind": "discovery_search",
+      "trust_level": "mixed",
+      "verification_status": "search_page_not_individually_reviewed",
+      "description": "Discover projects and release pages that may publish IPA build artifacts.",
+      "safety_notes": "Check ownership, release provenance, license, signatures and project activity before downloading or installing any app."
+    },
+    {
+      "id": "utm-official-releases",
+      "name": "UTM official GitHub releases",
+      "url": "https://github.com/utmapp/UTM/releases",
+      "kind": "official_project_release_page",
+      "trust_level": "project-maintained",
+      "verification_status": "official_repository_link_not_asset_verified",
+      "description": "Official release page for the open-source UTM project; inspect each release's assets and platform instructions.",
+      "safety_notes": "Only download assets published by the official project and verify checksums when provided."
+    },
+    {
+      "id": "altstore-official",
+      "name": "AltStore project",
+      "url": "https://github.com/altstoreio/AltStore",
+      "kind": "official_project_repository",
+      "trust_level": "project-maintained",
+      "verification_status": "official_repository_link_not_asset_verified",
+      "description": "Open-source project associated with alternative app distribution; use its official documentation to understand source and package handling.",
+      "safety_notes": "This is a project repository, not a guarantee that a particular IPA is available or safe."
+    },
+    {
+      "id": "livecontainer-releases",
+      "name": "LiveContainer official releases",
+      "url": "https://github.com/LiveContainer/LiveContainer/releases",
+      "kind": "official_project_release_page",
+      "trust_level": "project-maintained",
+      "verification_status": "official_repository_link_not_asset_verified",
+      "description": "Official release page for the LiveContainer project; verify assets and compatibility in the release notes.",
+      "safety_notes": "Review permissions, supported iOS versions and release provenance before use."
+    },
+    {
+      "id": "ipa-library-community-index",
+      "name": "IPAlibrary/IPA community index",
+      "url": "https://github.com/IPAlibrary/IPA",
+      "kind": "community_index",
+      "trust_level": "unverified-third-party",
+      "verification_status": "not_independently_audited",
+      "description": "Community-maintained index that describes third-party IPA libraries and includes modified or jailbreak-related categories.",
+      "safety_notes": "Links are external and are not endorsed, mirrored, scanned or verified by iOS-RE Agent. Avoid unauthorized copies; inspect provenance, terms, signatures and security implications before use."
+    }
+  ]
+}

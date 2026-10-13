@@ -1,9 +1,5 @@
 # Examples
 
-`sample-report.md` shows the report tone using synthetic metadata and reserved `.test` domains. It is illustrative, not analysis of an actual third-party app.
-
-For a complete report, run the CLI against an authorized app artifact:
-
-```bash
-python -m ios_re_agent analyze /path/to/authorized.ipa --out reports/example
-```
+- `sample-report.md` is synthetic and demonstrates how report evidence is presented. It is not a real app report.
+- `mcp/mcp-config.example.json` shows the generic command/args shape for an MCP client. Use the configuration location documented by your own client and substitute an absolute CLI path.
+- Do not commit third-party IPA files, app bundles, decompiled pseudocode, signing materials or proprietary reports to this repository.

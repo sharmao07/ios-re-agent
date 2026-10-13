@@ -125,9 +125,39 @@ def write_markdown(report: dict[str, Any], destination: Path) -> None:
     endpoints = network.get("candidate_endpoints", [])
     if endpoints:
         lines += ["", "### Sanitized endpoint strings", ""]
-        lines.extend([f"- `{_md(endpoint)}`" for endpoint in endpoints[:100]])
+        evidence_by_url = {
+            str(item.get("url")): item for item in network.get("evidence", []) if isinstance(item, dict)
+        }
+        for endpoint in endpoints[:100]:
+            evidence = evidence_by_url.get(str(endpoint), {})
+            source = evidence.get("source_path", "path not recorded")
+            offset = evidence.get("byte_offset")
+            location = f" — `{_md(source)}`" + (f" at byte {offset}" if isinstance(offset, int) else "")
+            label = evidence.get("classification", "candidate")
+            lines.append(f"- `{_md(endpoint)}` ({_md(label)}){location}")
         if len(endpoints) > 100:
             lines.append(f"- … and {len(endpoints) - 100} more (see `report.json`).")
+    reference_urls = network.get("reference_urls", [])
+    if reference_urls:
+        lines += ["", "### Reference, documentation, and static-asset URLs", "",
+                  "These are separated from service-endpoint candidates to reduce noise.", ""]
+        lines.extend(f"- `{_md(url)}`" for url in reference_urls[:40])
+        if len(reference_urls) > 40:
+            lines.append(f"- … and {len(reference_urls) - 40} more (see `report.json`).")
+
+    features = report.get("feature_map", [])
+    lines += ["", "## Feature map hypotheses", "",
+              "> Hypotheses are generated from static names, declarations and strings. They are not verified runtime behavior.", ""]
+    if features:
+        lines += ["| Feature | Confidence | Evidence summary |", "|---|---|---|"]
+        for feature in features:
+            lines.append("| " + " | ".join(_md(feature.get(key, "")) for key in ("feature", "confidence", "summary")) + " |")
+        for feature in features:
+            lines += ["", f"### `{_md(feature.get('feature', 'unknown'))}` evidence", ""]
+            for evidence in feature.get("evidence", [])[:8]:
+                lines.append(f"- `{_md(evidence.get('source_path', 'unknown'))}` — {_md(evidence.get('reason', ''))}")
+    else:
+        lines.append("No feature hypotheses met the minimum evidence rules.")
 
     indicators = report.get("keyword_indicators", {})
     lines += ["", "## Keyword indicators", ""]

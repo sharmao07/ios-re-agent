@@ -10,10 +10,11 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
 
 from . import __version__
+from .features import build_feature_map
 from .macho import inspect_macho
+from .network import extract_url_findings, valid_hostname
 
 MAX_ARCHIVE_ENTRIES = 25_000
 MAX_SINGLE_READ = 64 * 1024 * 1024
@@ -21,7 +22,6 @@ MAX_TOTAL_SCAN_BYTES = 256 * 1024 * 1024
 MAX_SCAN_FILES = 180
 MAX_PLIST_READ = 2 * 1024 * 1024
 
-URL_RE = re.compile(rb"https?://[^\x00-\x20\"'<>\\]{4,512}", re.IGNORECASE)
 KEYWORD_PATTERNS: dict[str, re.Pattern[bytes]] = {
     "analytics": re.compile(rb"analytics|telemetry|amplitude|mixpanel|segment\.com", re.I),
     "crash_reporting": re.compile(rb"sentry|crashlytics|bugsnag|rollbar|\bcrashreport", re.I),
@@ -31,10 +31,6 @@ KEYWORD_PATTERNS: dict[str, re.Pattern[bytes]] = {
     "cloud_services": re.compile(rb"firebase|amazonaws|cloudflare|supabase|azure|googleapis", re.I),
     "web_sockets": re.compile(rb"wss?://|websocket|socket\.io", re.I),
 }
-SENSITIVE_PATH_SEGMENT = re.compile(
-    r"(?i)(?:token|secret|password|passwd|api[_-]?key|access[_-]?key|session)[=:_-].+"
-)
-LONG_OPAQUE_SEGMENT = re.compile(r"^[A-Za-z0-9_-]{28,}$")
 
 
 class AnalysisError(Exception):
@@ -165,36 +161,6 @@ class ArtifactReader:
             return None
 
 
-def _safe_url(raw: bytes | str) -> str | None:
-    text = raw.decode("utf-8", errors="ignore") if isinstance(raw, bytes) else raw
-    text = text.rstrip(".,);]}>")
-    try:
-        parsed = urlsplit(text)
-        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
-            return None
-        # Credentials and query values are omitted from reports to reduce accidental secret leaks.
-        host = parsed.hostname.lower()
-        # XML property lists commonly contain Apple's external DTD identifier;
-        # it is format metadata, not evidence of an app endpoint.
-        if host == "www.apple.com" and parsed.path.startswith("/DTDs/PropertyList-"):
-            return None
-        if ":" in host and not host.startswith("["):
-            host = f"[{host}]"
-        port = f":{parsed.port}" if parsed.port else ""
-        netloc = host + port
-        segments = []
-        for segment in parsed.path.split("/"):
-            if SENSITIVE_PATH_SEGMENT.search(segment) or LONG_OPAQUE_SEGMENT.fullmatch(segment):
-                segments.append("<redacted>")
-            else:
-                segments.append(segment[:120])
-        path = "/".join(segments)[:400]
-        suffix = "?<redacted>" if parsed.query else ""
-        return urlunsplit((parsed.scheme.lower(), netloc, path, "", "")) + suffix
-    except (ValueError, UnicodeError):
-        return None
-
-
 def _load_plist(data: bytes | None) -> dict[str, Any] | None:
     if not data:
         return None
@@ -304,6 +270,16 @@ def _framework_names(paths: list[str]) -> list[str]:
     return sorted(names)[:500]
 
 
+def _framework_evidence(paths: list[str]) -> dict[str, str]:
+    """Map framework names to concrete package paths as provenance."""
+    result: dict[str, str] = {}
+    for path in paths:
+        for part in PurePosixPath(path).parts:
+            if part.endswith((".framework", ".dylib")):
+                result.setdefault(part, path)
+    return dict(sorted(result.items()))
+
+
 def _select_scan_paths(paths: list[str], executable: str | None) -> list[str]:
     selected: list[str] = []
     if executable and executable in paths:
@@ -327,22 +303,39 @@ def analyze(path: str | Path) -> dict[str, Any]:
     input_path = Path(path)
     with ArtifactReader(input_path) as reader:
         if reader.kind == "binary":
-            data = reader.read(reader.path.name, MAX_SINGLE_READ)
-            macho = inspect_macho(data or b"")
-            result = {
-                "schema_version": "1.0",
+            data = reader.read(reader.path.name, MAX_SINGLE_READ) or b""
+            macho = inspect_macho(data)
+            findings = extract_url_findings(data, reader.path.name, max_urls=200)
+            endpoints = [item for item in findings if item.get("classification") in {"possible_service_endpoint", "unclassified_url"}]
+            references = sorted({str(item["url"]) for item in findings if item not in endpoints})
+            counts: Counter[str] = Counter()
+            for name, pattern in KEYWORD_PATTERNS.items():
+                counts[name] = min(10_000, sum(1 for _ in pattern.finditer(data)))
+            result: dict[str, Any] = {
+                "schema_version": "1.1",
                 "tool": {"name": "ios-re-agent", "version": __version__},
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "input": {"name": reader.path.name, "type": "macho_binary"},
                 "macho": macho,
-                "scan": {"truncated_files": sorted(reader.truncated_paths)},
+                "network_indicators": {
+                    "candidate_endpoints": sorted({str(item["url"]) for item in endpoints}),
+                    "candidate_hosts": sorted({str(item["host"]) for item in endpoints if valid_hostname(str(item.get("host", "")))}),
+                    "evidence": endpoints,
+                    "reference_urls": references,
+                    "interpretation": "Candidate strings only; no endpoint is contacted and a static match does not prove runtime use.",
+                },
+                "keyword_indicators": dict(sorted((key, value) for key, value in counts.items() if value)),
+                "keyword_evidence": {key: [{"source_path": reader.path.name, "match_count": value}] for key, value in counts.items() if value},
+                "scan": {"files_scanned": [reader.path.name] if data else [], "files_skipped": [], "truncated_files": sorted(reader.truncated_paths), "bytes_scanned": len(data), "scan_limits": {"max_bytes_per_file": MAX_SINGLE_READ, "max_total_bytes": MAX_SINGLE_READ, "max_files": 1}},
                 "limitations": [
                     "A binary-only input has no bundle metadata or resources to inventory.",
-                    "This tool parses headers and selected indicators; it is not a complete decompiler.",
-                    *(["The binary exceeded the configured read limit and only its prefix was inspected."] if reader.truncated_paths else []),
+                    "The built-in parser reads Mach-O metadata and bounded string indicators; use the optional Ghidra adapter for native pseudocode.",
+                    *( ["The binary exceeded the configured read limit and only its prefix was inspected."] if reader.truncated_paths else [] ),
                 ],
             }
+            result["feature_map"] = build_feature_map(result)
             return result
+
 
         paths = reader.list_paths()
         app_info = _load_plist(reader.read("Info.plist", MAX_PLIST_READ))
@@ -368,11 +361,13 @@ def analyze(path: str | Path) -> dict[str, Any]:
         extensions = _inspect_extensions(paths, reader)
         extension_counts = _extension_counts(paths)
 
-        candidate_urls: set[str] = set()
+        endpoint_evidence: dict[str, dict[str, Any]] = {}
+        reference_urls: set[str] = set()
         scan_bytes = 0
         scanned_files: list[str] = []
         skipped_files: list[str] = []
         indicator_counts: Counter[str] = Counter()
+        keyword_evidence: dict[str, list[dict[str, Any]]] = {}
         scan_paths = _select_scan_paths(paths, executable)
         for rel_path in scan_paths:
             if scan_bytes >= MAX_TOTAL_SCAN_BYTES:
@@ -384,15 +379,15 @@ def analyze(path: str | Path) -> dict[str, Any]:
                 continue
             scan_bytes += len(data)
             scanned_files.append(rel_path)
-            if len(candidate_urls) < 500:
-                for match in URL_RE.finditer(data):
-                    clean = _safe_url(match.group(0))
-                    if clean:
-                        candidate_urls.add(clean)
-                    if len(candidate_urls) >= 500:
-                        break
+            for finding in extract_url_findings(data, rel_path, max_urls=200):
+                url = str(finding["url"])
+                classification = str(finding["classification"])
+                if classification in {"possible_service_endpoint", "unclassified_url"}:
+                    endpoint_evidence.setdefault(url, finding)
+                else:
+                    reference_urls.add(url)
             for name, pattern in KEYWORD_PATTERNS.items():
-                # Count without retaining raw matches; cap work/output per category.
+                # Count without retaining raw snippets; retain path-level provenance.
                 hits = 0
                 for _match in pattern.finditer(data):
                     hits += 1
@@ -400,20 +395,19 @@ def analyze(path: str | Path) -> dict[str, Any]:
                         break
                 if hits:
                     indicator_counts[name] = min(10_000, indicator_counts[name] + hits)
+                    keyword_evidence.setdefault(name, []).append({"source_path": rel_path, "match_count": hits})
 
         endpoint_hosts: set[str] = set()
-        for endpoint in candidate_urls:
-            try:
-                hostname = urlsplit(endpoint.split("?<redacted>", 1)[0]).hostname
-                if hostname:
-                    endpoint_hosts.add(hostname.lower())
-            except ValueError:
-                continue
+        for finding in endpoint_evidence.values():
+            hostname = str(finding.get("host", "")).lower()
+            if valid_hostname(hostname):
+                endpoint_hosts.add(hostname)
 
         categories: dict[str, Any] = {
             "file_count": len(paths),
             "extension_counts": extension_counts,
             "frameworks_and_dynamic_libraries": framework_names,
+            "framework_evidence": _framework_evidence(paths),
             "app_extensions": extensions,
             "localization_count": len({
                 part for p in paths for part in PurePosixPath(p).parts if part.endswith(".lproj")
@@ -438,8 +432,8 @@ def analyze(path: str | Path) -> dict[str, Any]:
         if encrypted_slices:
             limitations.append("At least one Mach-O slice has a nonzero encryption flag; deeper code inspection may be limited.")
 
-        return {
-            "schema_version": "1.0",
+        report: dict[str, Any] = {
+            "schema_version": "1.1",
             "tool": {"name": "ios-re-agent", "version": __version__},
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "input": {"name": reader.path.name, "type": reader.kind},
@@ -447,11 +441,14 @@ def analyze(path: str | Path) -> dict[str, Any]:
             "inventory": categories,
             "macho": macho,
             "network_indicators": {
-                "candidate_endpoints": sorted(candidate_urls)[:500],
+                "candidate_endpoints": sorted(endpoint_evidence)[:500],
                 "candidate_hosts": sorted(endpoint_hosts)[:300],
-                "interpretation": "Candidate strings only; confirm reachability and use through authorized dynamic testing or source evidence.",
+                "evidence": [endpoint_evidence[url] for url in sorted(endpoint_evidence)[:500]],
+                "reference_urls": sorted(reference_urls)[:500],
+                "interpretation": "Candidate strings only; no endpoint is contacted and a static match does not prove runtime use.",
             },
             "keyword_indicators": dict(sorted(indicator_counts.items())),
+            "keyword_evidence": {key: value[:20] for key, value in sorted(keyword_evidence.items())},
             "scan": {
                 "files_scanned": scanned_files,
                 "files_skipped": skipped_files[:100],
@@ -465,3 +462,5 @@ def analyze(path: str | Path) -> dict[str, Any]:
             },
             "limitations": limitations,
         }
+        report["feature_map"] = build_feature_map(report)
+        return report

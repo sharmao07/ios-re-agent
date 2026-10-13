@@ -1,65 +1,76 @@
 # Architecture
 
-## Design goals
+## Principles
 
-- **Read-only:** app artifacts are inspected as data and are never executed.
-- **Bounded:** archive entries, per-file reads, total scan bytes, and the number of scanned files are limited.
-- **Evidence-first:** output distinguishes parsed metadata from candidate indicators and calls out missing evidence.
-- **Local-first:** the runtime uses Python's standard library and does not upload artifacts to a service.
-- **Composable:** report output is JSON first-class, with Markdown generated from the same finding object.
+- **Read-only target handling:** the target app is never executed; IPA contents are read from ZIP members and only selected native executables are staged into temporary space for Ghidra.
+- **Bounded:** archive entries, plist sizes, string scan files/bytes, native binary count, binary size and total native staging size are capped.
+- **Evidence-first:** findings preserve source paths, byte offsets when extracted from raw strings, classifications and limitations.
+- **Local-first:** package analysis and native decompilation run locally. Only the explicit `sources discover` command and corresponding MCP tool contact GitHub's public API.
+- **Composable:** JSON is the primary report format, with Markdown views generated from the same report objects.
+- **No universal decompilation claim:** original source is rarely recoverable verbatim from compiled apps; Ghidra pseudocode is a model for reasoning, not original Swift/Objective-C source.
 
 ## Data flow
 
 ```text
-Authorized input (.ipa / .app / Mach-O)
-                |
-                v
-      ArtifactReader (read-only)
-    - ZIP member reads; no extraction
-    - app directory traversal; skip symlinks
-    - bounded reads and path checks
-                |
-                v
-        Analysis pipeline
-    - Info.plist metadata
-    - bundle inventory / extensions
-    - privacy manifest declarations
-    - Mach-O header and load commands
-    - bounded strings and candidate URL scan
-                |
-                v
-         Normalized report object
-                |
-          +-----+-----+
-          |           |
-          v           v
-      report.json  REPORT.md
+Authorized IPA / .app / Mach-O
+           │
+           ├── package reader (no full IPA extraction)
+           │      ├── Info.plist / extension / framework inventory
+           │      ├── privacy manifest declarations
+           │      └── bounded string scan + byte-offset provenance
+           │
+           ├── Mach-O parser
+           │      └── architecture, load commands, linked libraries, flags
+           │
+           ├── feature-map heuristics
+           │      └── hypotheses with evidence paths and confidence labels
+           │
+           └── optional Ghidra adapter
+                  ├── identify executable bundles / dylibs
+                  ├── stage recognized Mach-O files into temporary storage
+                  ├── run analyzeHeadless independently per module
+                  └── export function names, pseudocode, call edges and strings
+                           │
+                           ▼
+                JSON + Markdown reports
+                           │
+                           ▼
+                 MCP server (stdio)
+                  ├── run analysis/decompilation
+                  ├── search report evidence
+                  ├── retrieve feature map
+                  └── outbound IPA source discovery
 ```
 
 ## Modules
 
-- `src/ios_re_agent/analyzer.py`: input validation, bounded artifact reader, package inventory, plist parsing, indicator scanning, report object assembly.
-- `src/ios_re_agent/macho.py`: dependency-free parser for thin and universal Mach-O headers plus selected load commands.
-- `src/ios_re_agent/report.py`: serialize the normalized result to JSON or Markdown.
-- `src/ios_re_agent/cli.py`: command-line options, environment diagnostics, output directory handling.
-- `SKILL.md`: workflow instructions for an AI coding agent; it does not itself install tools or invoke external services.
+- `src/ios_re_agent/analyzer.py`: safe artifact reader, app metadata, inventory, privacy manifest parsing, bounded scan and report assembly.
+- `src/ios_re_agent/network.py`: URL sanitization, hostname validation, conservative classification and file/byte-offset provenance.
+- `src/ios_re_agent/features.py`: heuristic feature hypotheses with concrete evidence paths.
+- `src/ios_re_agent/macho.py`: dependency-free parser for thin/universal Mach-O headers and selected load commands.
+- `src/ios_re_agent/ghidra.py`: optional Ghidra `analyzeHeadless` orchestration, safe target selection/staging and aggregate report generation.
+- `src/ios_re_agent/data/ExportAnalysis.py`: Ghidra/Jython post-script to export function metadata, approximate pseudocode, direct call edges and string data.
+- `src/ios_re_agent/ipa_sources.py`: curated outbound catalog and optional GitHub API search for release assets ending in `.ipa`. It never downloads binaries.
+- `src/ios_re_agent/mcp_server.py`: dependency-free MCP stdio server; protocol responses are written to stdout and diagnostics are written to stderr.
+- `src/ios_re_agent/report.py`: JSON and Markdown report serialization.
+- `src/ios_re_agent/cli.py`: command-line front end.
+- `SKILL.md`: evidence-first agent workflow instructions.
 
-## Limits and parser boundaries
+## Limits and boundaries
 
-- Input type is inferred from the `.ipa` extension/archive structure, `.app` directory, or fallback single-file path. A random binary may return `format: unknown`.
-- IPA members are read in place from the ZIP and are not extracted. No app executable is launched.
-- The Mach-O parser reads CPU type, file type, command counts, dylib load paths, rpaths, build platform/minimum OS, and encryption flags when those commands are present and well-formed. It is not an instruction decoder or decompiler.
-- String scan selects the main executable, common text/plist file extensions, and some framework files. It is capped at 180 selected files and 256 MiB in total, with a 64 MiB per-file cap.
-- Each plist parse is capped at 2 MiB; the inventory examines at most 50 extension manifests and 50 privacy manifests.
-- Network findings are de-duplicated and capped at 500 candidate URL strings and 300 hostnames.
-- Keyword categories report capped match counts only. Raw matched strings are not included in that section.
-- Candidate URLs have userinfo, query values and fragments removed. Token-looking path segments are redacted heuristically. This is defense-in-depth, not a guarantee that arbitrary secrets will always be detected.
+- IPA scanning reads entries by path in the archive; the package itself is not extracted. Ghidra staging copies only selected Mach-O components to a temporary directory.
+- The analyzer caps archive entries, scan paths, bytes per file and total string-scan bytes. The Ghidra adapter caps binary count, bytes per binary and total bytes staged.
+- Native decompilation currently depends on a separately installed Ghidra `analyzeHeadless`. The included script is designed for Ghidra's Jython-compatible script environment; compatibility must be validated against actual supported Ghidra releases.
+- Functions are discovered only where Ghidra's analysis finds them. The tool does not guarantee correct Swift/Objective-C semantic reconstruction, complete call graphs, recovery of original symbols, or full coverage of every bundle resource.
+- Candidate URLs can still be false positives. Feature-map confidence is heuristic support rather than a probability.
+- The source directory is an external link registry; it does not host binaries. Online discovery queries GitHub's API only when explicitly invoked, sends the search query to GitHub, and does not verify that a given binary is redistributable or safe.
+- No runtime instrumentation, traffic capture, code-signing bypass, FairPlay decryption, access-control bypass, app patching or repackaging is implemented.
 
-## Extending the analyzer
+## Extension guidelines
 
-1. Add a small parsing function that consumes bytes or a normalized finding object; do not add unbounded file reads.
-2. Attach provenance to each finding where practical: artifact path, parser, and byte offset/command identifier.
-3. Define what a positive match means and document false positives and false negatives.
-4. Add synthetic fixture tests for both valid and malformed inputs.
-5. Add the finding to JSON output and update the JSON schema/report documentation.
-6. Keep runtime behavior opt-in and separate from static analysis. Any future runtime adapter needs explicit target selection, user approval, visible effects, and dedicated tests.
+1. Start from a reproducible failing case and record exactly what the target artifact proves.
+2. Add a small helper with explicit output schema and size/work limits.
+3. Preserve source provenance and redact likely secrets before writing reports.
+4. Write synthetic fixture tests for valid, malformed and adversarial inputs.
+5. Update the JSON schema, README and changelog.
+6. State unimplemented backend behavior clearly; don't turn a link or heuristic into a claim of verified behavior.

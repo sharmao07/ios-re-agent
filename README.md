@@ -1,157 +1,217 @@
 # iOS-RE Agent
 
-**Evidence-first static analysis for authorized iOS app artifacts.** iOS-RE Agent inspects `.ipa` packages, `.app` bundle directories, and individual Mach-O binaries, then writes a human-readable `REPORT.md` and machine-readable `report.json`.
+**Investigate iOS apps with an AI agent, from package metadata down to native pseudocode.**
 
-> **Project status: early MVP (v0.1.0).** This is a read-only inspector and report generator, not a universal decompiler. It does not decrypt App Store binaries, bypass platform protections, execute the target app, control a device, or claim that static strings prove runtime behavior.
+iOS-RE Agent is an open-source, local-first toolkit for evidence-led analysis of iOS `.ipa` packages, `.app` bundles and Mach-O binaries. It combines package inventory, evidence-backed feature hypotheses, optional Ghidra decompilation, and an MCP server that lets compatible AI agents call the analysis tools.
+
+> **Status: 0.2.0 preview.** This is an early research tool. It can inspect many shipped artifacts and decompile readable native code with Ghidra, but it cannot recover the original source code of every app or prove runtime behavior from static evidence alone.
 
 ## What it does
 
-- Reads standard iOS `.ipa` archives **without extracting their contents to disk**.
-- Reads `.app` bundle directories and individual Mach-O files.
-- Extracts common `Info.plist` metadata, URL schemes, declared background modes, and `*UsageDescription` keys.
-- Parses basic thin and universal Mach-O headers and selected load commands: architectures, linked dylibs, rpaths, build platform, minimum OS version, and the encryption flag when present.
-- Inventories bundle file types, `.framework`/`.dylib` names, `.appex` extensions, localization directories, and `PrivacyInfo.xcprivacy` declarations.
-- Collects **candidate** HTTP(S) URL/host strings from a bounded selection of files. Query values, URL credentials, and some token-like path segments are redacted before they enter the report.
-- Emits bounded keyword-category counts for common SDK/integration clues without storing the matched raw strings.
-- Writes both Markdown and JSON reports with scan coverage and limitations.
-- Uses only the Python standard library at runtime.
+- Reads IPA ZIP members without extracting the entire package or executing the app.
+- Identifies bundle metadata, URL schemes, app extensions, framework/dylib names, privacy manifests, resource types and localization directories.
+- Parses thin and universal Mach-O headers and selected load commands.
+- Extracts sanitized URL clues with source paths and byte offsets, and separates likely service endpoints from documentation/static/reference URLs to reduce noise.
+- Records keyword-match provenance by file and builds a conservative feature map (sharing, notifications, integrations, media, networking, analytics clues, and related areas) with evidence paths and confidence labels.
+- Optionally uses a local Ghidra installation to inspect the main executable, extension executables, framework executables and embedded dynamic libraries. Each selected native component gets its own JSON and Markdown report, with recognized functions, approximate pseudocode, call edges and string clues when Ghidra can recover them.
+- Exposes analysis, report search, feature-map, native-decompile and IPA-source discovery tools through an MCP stdio server.
+- Provides a catalog of external IPA-source and release-discovery links. It never hosts, mirrors, installs, or automatically downloads IPA binaries.
+- Produces reproducible `report.json` and `REPORT.md` output while recording scan coverage and limitations.
 
-## What it does not do
+## The investigation loop
 
-- Fully decompile Swift or Objective-C source code.
-- Recover source code that has been stripped, obfuscated, or never shipped in the package.
-- Decrypt FairPlay-protected executable sections or defeat code-signing/device protections.
-- Run the app, perform runtime instrumentation, intercept traffic, or prove that a discovered endpoint is used.
-- Replace a mobile security review or establish whether an app is safe.
+```text
+INPUT ARTIFACT
+   │
+   ├── IPA / .app / Mach-O inventory
+   │      ├── metadata, resources, frameworks, extensions
+   │      ├── privacy declarations and URL schemes
+   │      └── candidate strings with file + byte-offset evidence
+   │
+   ├── Optional Ghidra native analysis
+   │      ├── main executable + embedded Mach-O components
+   │      ├── function names and approximate pseudocode
+   │      └── call edges and recovered strings
+   │
+   └── JSON report + Markdown report + feature hypotheses
+            │
+            ▼
+       MCP tools let an AI agent search evidence, inspect likely code paths,
+       compare clues, and write a reasoned investigation with uncertainty stated.
+```
 
-The goal of this first version is to produce reliable, traceable starting evidence for further authorized investigation. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for implementation boundaries and [docs/ROADMAP.md](docs/ROADMAP.md) for planned extensions.
+The intended workflow is **decompile → understand → recreate a function for your own project**, not to claim that original source has been recovered or to copy a complete proprietary application. This project takes inspiration from evidence-driven reverse-engineering workflows such as [REA](https://github.com/morluto/rea); it is an independent implementation and does not include REA code.
 
 ## Requirements
 
-- Python **3.10 or newer**.
-- macOS is the primary intended host. The Python package itself also supports other systems for file-based static analysis.
-- An `.ipa`, `.app` bundle directory, or Mach-O binary that you are authorized to inspect.
+- Python 3.10 or newer.
+- macOS is the primary development host. File-based static inspection also uses Python's standard library on other operating systems.
+- Ghidra is optional. Without it, package inventory and the built-in Mach-O parser still work; the native pseudocode command needs `analyzeHeadless` from an installed Ghidra distribution.
 
-There are no required third-party runtime dependencies. `otool`, `plutil`, and Ghidra are optional ecosystem tools; the current MVP does not invoke them.
+Runtime dependencies are standard-library only. Development extras install `pytest` and `ruff`.
 
 ## Install on macOS
 
-Open Terminal, move into the downloaded/cloned repository, and run:
-
 ```bash
-python3 --version
+git clone https://github.com/sharmao07/ios-re-agent.git
+cd ios-re-agent
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
+python -m pytest
 ```
 
-Check the environment:
+Check the environment and supported commands:
 
 ```bash
 ios-re-agent doctor
+ios-re-agent --help
 ```
 
-If the `ios-re-agent` command is not available in the current shell, use the module form instead:
+If the CLI is unavailable, ensure the virtual environment is activated. You can also run it as `python -m ios_re_agent`.
+
+## 1. Package analysis
+
+Analyze an IPA:
 
 ```bash
-python -m ios_re_agent doctor
+ios-re-agent analyze "/path/to/authorized-app.ipa" --out "reports/my-app"
 ```
 
-## Quick start
-
-### Analyze an IPA
+Analyze an extracted `.app` bundle or a Mach-O binary:
 
 ```bash
-ios-re-agent analyze "/path/to/MyApp.ipa" --out "reports/MyApp"
+ios-re-agent analyze "/path/to/MyApp.app" --out "reports/my-app"
+ios-re-agent analyze "/path/to/MyApp.app/MyApp" --out "reports/main-binary"
 ```
 
-### Analyze an extracted `.app` bundle
-
-```bash
-ios-re-agent analyze "/path/to/MyApp.app" --out "reports/MyApp"
-```
-
-### Inspect one Mach-O executable
-
-```bash
-ios-re-agent analyze "/path/to/MyApp.app/MyApp" --out "reports/MyApp-binary"
-```
-
-Each successful analysis writes:
+Output:
 
 ```text
-reports/MyApp/
+reports/my-app/
 ├── REPORT.md
 └── report.json
 ```
 
-Choose one output format if needed:
+The Markdown report is a readable overview. The JSON report is the canonical machine-readable result for scripts and agent investigation. Network entries include `source_path`, `byte_offset`, a classification and a reminder that static string matches do not prove a request occurs.
+
+## 2. Native decompilation with Ghidra
+
+Install Ghidra from its official project/release channels, then set `GHIDRA_HOME` to the Ghidra installation directory. Confirm `support/analyzeHeadless` exists and is executable:
 
 ```bash
-ios-re-agent analyze MyApp.ipa --out reports/MyApp --json-only
-ios-re-agent analyze MyApp.ipa --out reports/MyApp --markdown-only
+export GHIDRA_HOME="/path/to/ghidra"
+ios-re-agent doctor
 ```
 
-Get help at any time:
+Start with an authorized sample app:
 
 ```bash
-ios-re-agent --help
-ios-re-agent analyze --help
+ios-re-agent decompile "/path/to/authorized-app.ipa" \
+  --out "reports/my-app-native" \
+  --max-binaries 100 \
+  --timeout 900
 ```
 
-If not installed, use `python -m ios_re_agent` in place of `ios-re-agent`.
+For an IPA or `.app`, the adapter finds bundle executables declared by `Info.plist` and embedded `.dylib` files. It stages only recognized Mach-O payloads to a temporary workspace, never the entire archive, and analyzes selected native components separately. Limits keep analysis bounded. Outputs include:
 
-## Install from a downloaded ZIP
+```text
+reports/my-app-native/
+├── NATIVE_ANALYSIS.md
+├── native-analysis.json
+└── modules/
+    ├── 001_MyApp/
+    │   ├── NATIVE_ANALYSIS.md
+    │   └── analysis.json
+    └── ...
+```
 
-1. Download this repository ZIP from GitHub and extract it.
-2. Open Terminal and `cd` into the extracted `ios-re-agent` folder.
-3. Run the install commands above.
-4. Run `python -m ios_re_agent analyze "/full/path/to/MyApp.ipa" --out reports/MyApp`.
-5. Open `reports/MyApp/REPORT.md`; use `report.json` for scripts and agent workflows.
+Ghidra may fail to recover functions or pseudocode for encrypted, obfuscated, optimized, stripped or unsupported code. Native decompilation is approximate; it is not the original Swift/Objective-C source. The adapter does not bypass app encryption, code signing or device protections. No target code is executed. This command has not yet been validated against every Ghidra release or every iOS binary type; please report compatibility issues with reproducible synthetic or authorized fixtures.
 
-## Upload this project to GitHub
+## 3. Ask an AI agent to investigate the app
 
-1. Create an empty GitHub repository named `ios-re-agent` (or your chosen name). Do not add a README or license there, because these are included.
-2. Extract the project ZIP downloaded from this repository template/artifact.
-3. In Terminal, `cd` into the extracted project folder, then run:
+The MCP server exposes these tools:
 
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial iOS reverse engineering analysis toolkit"
-   git branch -M main
-   git remote add origin https://github.com/YOUR-USERNAME/ios-re-agent.git
-   git push -u origin main
-   ```
+- `analyze_ios_artifact` — run the built-in report pipeline and return a concise summary.
+- `decompile_ios_native_code` — optional Ghidra pass over native components.
+- `search_analysis_report` — find relevant functions, symbols, strings, URLs and evidence paths in a report.
+- `get_feature_map` — return feature hypotheses and their supporting evidence.
+- `list_ipa_sources` / `search_ipa_sources` — search the outbound source catalog.
+- `discover_github_ipa_releases` — query GitHub's public API for repositories with licensed source metadata and `.ipa` release assets; this returns links only and does not verify that the binary is licensed for redistribution.
 
-4. Replace `YOUR-USERNAME` with your GitHub username. Keep app packages, private test apps, reports, signing material, and credentials out of the public repository. The included `.gitignore` already excludes common `.ipa`, `.app`, and report paths.
+Start the server manually to test its availability:
 
-## Tests and code quality
+```bash
+ios-re-agent mcp
+```
+
+The command uses JSON-RPC over standard input/output; it is meant to be launched by an MCP-compatible client, not used as an interactive shell command.
+
+Example generic MCP client configuration (replace the paths with absolute paths on your Mac):
+
+```json
+{
+  "mcpServers": {
+    "ios-re-agent": {
+      "command": "/absolute/path/to/ios-re-agent/.venv/bin/ios-re-agent",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Use the configuration location documented by your MCP client, restart it, then ask something like:
+
+> Investigate the notification flow in this authorized iOS app. Start from the feature map, search the report for notification-related symbols and components, inspect relevant native component reports if available, and cite every claim with its evidence path. Distinguish observations, hypotheses and unknowns.
+
+An AI agent can organize findings and choose follow-up queries. It should not treat a feature-map label as proof of a working feature. Dynamic behavior still requires a separately designed, explicitly authorized simulator/device workflow, which is not included in this release.
+
+## 4. Find external sources for IPA files
+
+List or search the configured catalog:
+
+```bash
+ios-re-agent sources list
+ios-re-agent sources search official
+ios-re-agent sources search community
+```
+
+Discover public GitHub release assets for a project name:
+
+```bash
+ios-re-agent sources discover "open source iOS app" --max-repositories 8
+```
+
+The discovery command sends the query to GitHub's public API. It requires an Internet connection and can be affected by API rate limits. It only returns external repository/release links; it never downloads or installs the IPA. Catalog entries are explicitly labelled by source/trust status. The [IPAlibrary/IPA index](https://github.com/IPAlibrary/IPA) is listed as an **unverified community index**, not an endorsed or audited source; its README includes modified/jailbreak-related categories, so review the source, provenance, licensing and device compatibility carefully. Neither this project nor a GitHub repository license is proof that each attached IPA can legally be redistributed.
+
+Prefer assets published by an application's original developers, check licenses and release notes, verify checksums/signatures where available, and do not upload someone else's IPA or generated report to a public repository without permission.
+
+## Evidence interpretation and limits
+
+- **Observed:** data parsed from an artifact, such as an `Info.plist` key, Mach-O load command or manifest declaration.
+- **Candidate:** a string or heuristic match that requires confirmation.
+- **Hypothesis:** a possible feature suggested by multiple clues; confidence describes heuristic support, not statistical certainty.
+- **Unknown:** skipped, unsupported, encrypted, unavailable or untested evidence.
+- **Privacy manifests:** statements reported from packaged manifests, not verification of actual collection.
+- **URLs:** a recovered string may be stale, embedded in third-party code, used only in a debug context, or never requested.
+- **Code:** decompiler output can contain invented or incorrect names/types and may miss optimized, stripped or dynamically dispatched logic.
+- **Coverage:** reports show bounded scan limits, paths scanned and skipped files. Absence from the report is not proof that an app lacks a feature.
+
+This project is for apps you own or are authorized to inspect, public research targets, and interoperability/security work allowed by the relevant terms and law. Review reports before sharing: binary/resource metadata and decompiled pseudocode may be confidential or copyright-protected.
+
+## Tests and quality checks
 
 ```bash
 python -m pytest
 python -m ruff check .
 ```
 
-Runtime code has no third-party dependencies. The development extra installs pytest and Ruff. GitHub Actions runs tests and lint on pushes and pull requests.
+GitHub Actions runs tests and lint. The Ghidra export script requires a local Ghidra installation, so the regular CI suite validates component selection and report logic with synthetic fixtures; an end-to-end Ghidra run must be tested separately on supported hosts.
 
-## Report interpretation
+## Open-source launch checklist
 
-- **Declarations are not behavior.** `Info.plist` and privacy manifest values are what the package declares; they are not independent verification of runtime behavior.
-- **Strings are leads, not proof.** A URL or SDK keyword can be stale, unused, environment-specific, or inside a third-party library.
-- **Absence is not proof of absence.** Encrypted, compressed, dynamically assembled, or unscanned data may not appear in the output.
-- **Scan is bounded.** The tool limits archive entry counts, selected-file counts, and bytes read to reduce resource-exhaustion risk. The report records selected paths and skipped files.
-- **Sensitive data:** query values and likely opaque token segments are redacted from candidate URL output, but automated redaction is not perfect. Review output before sharing reports publicly.
-
-## Agent skill
-
-The workflow is described in [`SKILL.md`](SKILL.md), also packaged as `.agents/skills/ios-re-agent/SKILL.md`. It is intended to guide an AI coding agent through a cautious, evidence-first investigation with this CLI. The skill is documentation/instructions; it does not by itself install an MCP server or modify any agent configuration.
-
-## Safety and authorization
-
-Use this project only on applications and artifacts you own or are explicitly authorized to analyze. Respect app licenses, privacy, intellectual property, and applicable law. Do not use it to collect secrets, target other people's accounts, or bypass technical protections. Read [SECURITY.md](SECURITY.md) before reporting a security issue.
+See [`docs/OPEN_SOURCE_LAUNCH.md`](docs/OPEN_SOURCE_LAUNCH.md) for release, documentation, provenance and issue-triage steps. Do not call this universal or fully complete until native integration has been verified on real authorized samples and its limitations are documented.
 
 ## License
 
-MIT. See [LICENSE](LICENSE). Third-party tools mentioned in documentation retain their own licenses and are not bundled with this project.
+MIT. See [LICENSE](LICENSE). Ghidra and any other optional tool retain their own licenses and are not bundled with this project.

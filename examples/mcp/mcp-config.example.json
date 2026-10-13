@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ios-re-agent": {
+      "command": "/absolute/path/to/ios-re-agent/.venv/bin/ios-re-agent",
+      "args": ["mcp"]
+    }
+  }
+}

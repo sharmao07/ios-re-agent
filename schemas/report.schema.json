@@ -6,7 +6,7 @@
   "type": "object",
   "required": ["schema_version", "tool", "generated_at", "input", "limitations"],
   "properties": {
-    "schema_version": { "type": "string", "const": "1.0" },
+    "schema_version": { "type": "string", "const": "1.1" },
     "tool": {
       "type": "object",
       "required": ["name", "version"],
@@ -29,8 +29,55 @@
     "app": { "type": "object" },
     "inventory": { "type": "object" },
     "macho": { "type": "object" },
-    "network_indicators": { "type": "object" },
+    "network_indicators": {
+      "type": "object",
+      "properties": {
+        "candidate_endpoints": { "type": "array", "items": { "type": "string" } },
+        "candidate_hosts": { "type": "array", "items": { "type": "string" } },
+        "reference_urls": { "type": "array", "items": { "type": "string" } },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "url": { "type": "string" },
+              "host": { "type": "string" },
+              "classification": { "type": "string" },
+              "source_path": { "type": "string" },
+              "byte_offset": { "type": "integer", "minimum": 0 },
+              "confidence": { "type": "string", "enum": ["low", "medium", "high"] }
+            },
+            "required": ["url", "source_path", "classification"],
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
     "keyword_indicators": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+    "keyword_evidence": { "type": "object" },
+    "feature_map": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["feature", "confidence", "summary", "evidence"],
+        "properties": {
+          "feature": { "type": "string" },
+          "confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+          "summary": { "type": "string" },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["source_path", "reason"],
+              "properties": { "source_path": { "type": "string" }, "reason": { "type": "string" } },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
     "scan": { "type": "object" },
     "limitations": { "type": "array", "items": { "type": "string" } }
   },

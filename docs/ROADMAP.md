@@ -1,41 +1,53 @@
 # Roadmap
 
-The roadmap is aspirational. Items are not implemented until they are documented in the README and covered by tests.
+This roadmap distinguishes code currently present from work not yet verified. A checkbox does not imply compatibility with every IPA or Ghidra release; CI and host-specific test evidence still matter.
 
-## v0.1 — static inventory and report (current)
+## v0.1 — static package inventory (complete)
 
-- [x] Read IPA archives without extracting them.
-- [x] Inspect app bundle metadata and selected privacy declarations.
-- [x] Parse basic thin/universal Mach-O headers and selected load commands.
-- [x] Inventory frameworks, extensions, file types, and localization directories.
-- [x] Emit sanitized candidate network indicators and JSON/Markdown reports.
-- [x] Bound archive entries, file reads, and scan coverage.
-- [x] Add synthetic fixtures, CLI, tests, and CI.
+- [x] Read IPA archives without extracting all members.
+- [x] Inspect app metadata, extensions, privacy declarations and Mach-O headers.
+- [x] Inventory file types, frameworks and localization paths.
+- [x] Emit bounded sanitized candidate URL clues and JSON/Markdown reports.
+- [x] Add synthetic tests and CI.
 
-## v0.2 — comparison and deeper metadata
+## v0.2 — evidence quality, feature mapping, agent interface and source catalog (implemented preview)
 
-- [ ] Compare two authorized builds and report added/removed resources, framework changes, metadata changes, and binary hashes.
-- [ ] Improve handling of large universal binaries by reading Mach-O headers/slices with random access rather than a fixed prefix.
-- [ ] Add more tests for malformed ZIPs, malformed property lists, universal Mach-O inputs, and redaction edge cases.
-- [ ] Add explicit report provenance for every finding (path, parser, and byte offset when available).
-- [ ] Improve privacy manifest validation against current Apple documentation.
+- [x] Validate candidate hostnames and separate likely service endpoints from documentation/static/reference URLs.
+- [x] Preserve source path and byte offset for candidate network strings.
+- [x] Preserve path-level keyword evidence and map SDK/extension/manifest clues to feature hypotheses.
+- [x] Add outbound IPA source catalog with verification/trust labels and warnings.
+- [x] Add optional GitHub public API discovery of release assets ending in `.ipa`; return links only, never download.
+- [x] Add dependency-free MCP stdio server with analysis, decompile, search, feature-map and source tools.
+- [x] Add Ghidra headless adapter and export script that analyzes selected main/extension/framework/dylib Mach-O components.
+- [x] Add synthetic tests for hostname validation, evidence provenance, source catalog, MCP tool registry and native component selection.
+- [ ] End-to-end verify Ghidra scripting on each officially supported Ghidra release and representative authorized iOS binaries.
+- [ ] Add golden-file regression tests from open-source, redistributable sample iOS apps.
 
-## v0.3 — optional native-tool adapters
+## v0.3 — native analysis quality
 
-- [ ] Optional read-only handoff to user-installed Ghidra for authorized binaries.
-- [ ] Optional `otool` metadata adapter on macOS, with captured tool version/output and explicit opt-in.
-- [ ] Add a tool interface so optional analyzers can be tested and disabled cleanly.
-- [ ] Compare debug builds or developer-provided symbol files when supplied by the app owner.
+- [ ] Add configurable per-component inclusion/exclusion patterns and richer progress reporting.
+- [ ] Improve Swift demangling, Objective-C class/protocol/category enumeration and selector cross-reference handling from Ghidra results.
+- [ ] Export string references and caller/callee relationships with stable addresses, not only display names.
+- [ ] Add report-to-native finding links, evidence IDs and report comparison across two app builds.
+- [ ] Evaluate other locally installed backends via explicit, tested adapters; do not claim Hopper/IDA support until implemented.
+- [ ] Test large universal/fat Mach-O, encrypted slices, stripped symbols, malformed bundle metadata and oversized archives.
+
+## v0.4 — investigation workbench
+
+- [ ] Add richer MCP methods for native function lookup, cross-reference search and targeted batch decompilation.
+- [ ] Add persistent case manifests that record input hashes, tool versions, selected modules and limitations without storing the target app.
+- [ ] Add local/offline LLM summarization as an optional backend with clear privacy controls; MCP should remain useful without a model.
+- [ ] Add app-build comparison for metadata, resources, frameworks, native functions and evidence deltas.
 
 ## Later — authorized runtime evidence
 
-- [ ] Define a separate, opt-in design for collecting observations from an owner-controlled simulator/test device.
-- [ ] Label static and runtime findings independently, with timestamps and repeatability notes.
-- [ ] Require explicit user selection of the target device and actions before any runtime interaction.
+- [ ] Design a separate opt-in simulator/test-device adapter for apps the user owns or has permission to test.
+- [ ] Label static and runtime evidence independently and preserve timestamps/reproduction steps.
+- [ ] Require explicit target and action selection; no stealth device control, credential collection, or automatic bypass attempts.
 
 ## Non-goals
 
-- Bypassing FairPlay or other app encryption.
-- Defeating code-signing, device protections, access controls, or authentication.
-- Stealing credentials or using discovered endpoints to access third-party accounts.
-- Claiming universal recovery of original source code from arbitrary iOS apps.
+- Bypassing FairPlay or other app encryption, code signing, access controls, or account protections.
+- Claiming that arbitrary iOS apps can be fully restored to original source code.
+- Hosting or mirroring third-party IPA files or asserting that external links are licensed, safe or verified.
+- Automatically executing apps, instrumenting devices, intercepting network traffic, patching app logic, or repackaging target apps.

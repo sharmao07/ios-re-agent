@@ -43,7 +43,7 @@ def test_report_files_are_written(tmp_path) -> None:
     write_json(report, json_path)
     write_markdown(report, md_path)
     loaded = json.loads(json_path.read_text(encoding="utf-8"))
-    assert loaded["schema_version"] == "1.0"
+    assert loaded["schema_version"] == "1.1"
     assert "Limitations and interpretation" in md_path.read_text(encoding="utf-8")
 
 
@@ -77,3 +77,13 @@ def test_binary_input_reports_type(tmp_path) -> None:
     report = analyze(binary)
     assert report["input"]["type"] == "macho_binary"
     assert report["macho"]["slices"][0]["architecture"] == "arm64"
+
+
+def test_report_includes_feature_map_and_network_provenance(tmp_path) -> None:
+    report = analyze(write_ipa(tmp_path / "Demo.ipa"))
+    assert report["schema_version"] == "1.1"
+    assert any(item["feature"] == "native_code_present" for item in report["feature_map"])
+    assert report["network_indicators"]["evidence"]
+    finding = report["network_indicators"]["evidence"][0]
+    assert "source_path" in finding
+    assert "byte_offset" in finding
