@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "report.schema.json",
+  "title": "iOS-RE Agent report",
+  "description": "Machine-readable static-inspection report. Findings are not proof of runtime behavior.",
+  "type": "object",
+  "required": ["schema_version", "tool", "generated_at", "input", "limitations"],
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0" },
+    "tool": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string", "const": "ios-re-agent" },
+        "version": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "input": {
+      "type": "object",
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["ipa", "app_bundle", "macho_binary"] }
+      },
+      "additionalProperties": true
+    },
+    "app": { "type": "object" },
+    "inventory": { "type": "object" },
+    "macho": { "type": "object" },
+    "network_indicators": { "type": "object" },
+    "keyword_indicators": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+    "scan": { "type": "object" },
+    "limitations": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": true
+}

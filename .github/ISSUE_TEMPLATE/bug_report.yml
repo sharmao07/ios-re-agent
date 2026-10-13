@@ -1,0 +1,36 @@
+name: Bug report
+description: Report a reproducible problem in iOS-RE Agent.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not upload private application packages, credentials, provisioning profiles, or proprietary reports. Use synthetic/minimized reproductions where possible."
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Include the error message and expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Run ... 2. See ..."
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      placeholder: "3.12.1"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "macOS version"
+    validations:
+      required: true
