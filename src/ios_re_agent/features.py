@@ -14,8 +14,11 @@ def build_feature_map(report: dict[str, Any]) -> list[dict[str, Any]]:
     manifests = inventory.get("privacy_manifests", [])
     urls = network.get("evidence", [])
     schemes = [str(v).lower() for v in app.get("url_schemes", [])]
-    query_schemes = [str(v).lower() for v in app.get("queried_url_schemes", [])]
-    all_schemes = schemes + query_schemes
+    query_schemes = [
+        str(v).strip().lower()
+        for v in app.get("queried_url_schemes", [])
+        if str(v).strip()
+    ]
     modes = [str(v).lower() for v in app.get("background_modes", [])]
     usage = app.get("privacy_usage_descriptions", [])
     usage_keys = {str(item.get("key", "")) for item in usage if isinstance(item, dict)}
@@ -40,6 +43,26 @@ def build_feature_map(report: dict[str, Any]) -> list[dict[str, Any]]:
             ext_evidence.append({"source_path": str(ext.get("path", "Info.plist")), "reason": "Share/action extension declared in bundle metadata"})
     if ext_evidence or any("share" in s or "pinterest" in s for s in schemes):
         add("sharing_and_deep_links", "medium", "The package declares share-related components or URL schemes; runtime routing is not verified.", ext_evidence + [{"source_path": "Info.plist", "reason": f"Declared URL scheme: {scheme}"} for scheme in schemes[:4] if "share" in scheme or scheme == "pinterest"])
+
+    queried_app_evidence = [
+        {
+            "source_path": "Info.plist",
+            "reason": f"External URL scheme queried: {scheme}",
+        }
+        for scheme in query_schemes[:10]
+    ]
+
+    if queried_app_evidence:
+        add(
+            "app_to_app_integrations",
+            "low",
+            (
+                "The package declares external URL schemes to query. "
+                "This suggests possible app-to-app compatibility checks, "
+                "but does not prove an external app was present or launched."
+            ),
+            queried_app_evidence,
+        )
 
     push_evidence = [{"source_path": str(ext.get("path", "Info.plist")), "reason": "Notification extension declared"}
                      for ext in extensions if isinstance(ext, dict) and "notification" in str(ext.get("path", "")).lower()]
