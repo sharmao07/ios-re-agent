@@ -15,6 +15,7 @@ def build_feature_map(report: dict[str, Any]) -> list[dict[str, Any]]:
     urls = network.get("evidence", [])
     schemes = [str(v).lower() for v in app.get("url_schemes", [])]
     query_schemes = [str(v).lower() for v in app.get("queried_url_schemes", [])]
+    all_schemes = schemes + query_schemes
     modes = [str(v).lower() for v in app.get("background_modes", [])]
     usage = app.get("privacy_usage_descriptions", [])
     usage_keys = {str(item.get("key", "")) for item in usage if isinstance(item, dict)}
