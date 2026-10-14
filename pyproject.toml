@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ios-re-agent"
-version = "0.2.0"
+version = "0.3.0"
 description = "Evidence-first static inspection and reporting for authorized iOS app artifacts"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -39,7 +39,7 @@ ios-re-agent = "ios_re_agent.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-ios_re_agent = ["data/*.json", "data/*.py"]
+ios_re_agent = ["data/*.json", "data/*.py", "data/*.java"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -56,3 +56,4 @@ select = ["E4", "E7", "E9", "F", "I", "B"]
 # Ghidra injects these globals into its Jython post-script runtime.
 "scripts/ghidra/ExportAnalysis.py" = ["F821"]
 "src/ios_re_agent/data/ExportAnalysis.py" = ["F821"]
+"src/ios_re_agent/data/ExportAnalysisJython.py" = ["F821"]

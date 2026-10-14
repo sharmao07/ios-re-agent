@@ -3,6 +3,10 @@
     "ios-re-agent": {
       "command": "/absolute/path/to/ios-re-agent/.venv/bin/ios-re-agent",
       "args": ["mcp"]
+    },
+    "rea": {
+      "command": "npx",
+      "args": ["-y", "rea-agents@4.1.0", "mcp"]
     }
   }
 }

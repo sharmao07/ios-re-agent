@@ -12,6 +12,8 @@ def test_mcp_initialize_and_tools_list() -> None:
     assert {item["name"] for item in tools["result"]["tools"]} == {item["name"] for item in TOOLS}
     assert "analyze_ios_artifact" in {item["name"] for item in TOOLS}
     assert "discover_github_ipa_releases" in {item["name"] for item in TOOLS}
+    assert "rea_native_operation" in {item["name"] for item in TOOLS}
+    assert "analyze_ios_with_rea" in {item["name"] for item in TOOLS}
 
 
 def test_mcp_list_ipa_sources_tool_returns_notice() -> None:

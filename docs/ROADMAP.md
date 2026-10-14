@@ -23,14 +23,16 @@ This roadmap distinguishes code currently present from work not yet verified. A 
 - [ ] End-to-end verify Ghidra scripting on each officially supported Ghidra release and representative authorized iOS binaries.
 - [ ] Add golden-file regression tests from open-source, redistributable sample iOS apps.
 
-## v0.3 — native analysis quality
+## v0.3 — upstream native engine bridge (implemented preview)
 
-- [ ] Add configurable per-component inclusion/exclusion patterns and richer progress reporting.
-- [ ] Improve Swift demangling, Objective-C class/protocol/category enumeration and selector cross-reference handling from Ghidra results.
-- [ ] Export string references and caller/callee relationships with stable addresses, not only display names.
-- [ ] Add report-to-native finding links, evidence IDs and report comparison across two app builds.
-- [ ] Evaluate other locally installed backends via explicit, tested adapters; do not claim Hopper/IDA support until implemented.
+- [x] Delegate native analysis, string/procedure search, function dossiers, decompilation, xrefs, traces and instruction inspection to upstream REA when its CLI is installed.
+- [x] Add batch IPA/.app native component analysis through upstream REA and preserve per-component JSON evidence.
+- [x] Add MCP tools for REA native operations and batch iOS native analysis.
+- [x] Make Ghidra launcher detection Homebrew-layout aware and use PyGhidra on current installs where available.
+- [x] Add a pre-analysis script to disable two expensive Objective-C analyzers implicated in long headless runs.
+- [ ] End-to-end verify the Ghidra fallback and upstream REA bridge on representative authorized iOS binaries, including the previously timing-out Pinterest binary.
 - [ ] Test large universal/fat Mach-O, encrypted slices, stripped symbols, malformed bundle metadata and oversized archives.
+- [ ] Add configurable per-component inclusion/exclusion patterns, richer progress reporting and report-to-native evidence IDs.
 
 ## v0.4 — investigation workbench
 

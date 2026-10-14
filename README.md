@@ -4,7 +4,7 @@
 
 iOS-RE Agent is an open-source, local-first toolkit for evidence-led analysis of iOS `.ipa` packages, `.app` bundles and Mach-O binaries. It combines package inventory, evidence-backed feature hypotheses, optional Ghidra decompilation, and an MCP server that lets compatible AI agents call the analysis tools.
 
-> **Status: 0.2.0 preview.** This is an early research tool. It can inspect many shipped artifacts and decompile readable native code with Ghidra, but it cannot recover the original source code of every app or prove runtime behavior from static evidence alone.
+> **Status: 0.3.0 preview.** This is an iOS-focused investigation layer, not a reimplementation of a decompiler. It provides bounded IPA inventory and evidence reporting, then can delegate deeper native analysis to upstream [REA](https://github.com/morluto/rea) through its documented CLI. A local Ghidra fallback is also available. No tool can recover original source code for every app or prove runtime behavior from static evidence alone.
 
 ## What it does
 
@@ -13,8 +13,9 @@ iOS-RE Agent is an open-source, local-first toolkit for evidence-led analysis of
 - Parses thin and universal Mach-O headers and selected load commands.
 - Extracts sanitized URL clues with source paths and byte offsets, and separates likely service endpoints from documentation/static/reference URLs to reduce noise.
 - Records keyword-match provenance by file and builds a conservative feature map (sharing, notifications, integrations, media, networking, analytics clues, and related areas) with evidence paths and confidence labels.
-- Optionally uses a local Ghidra installation to inspect the main executable, extension executables, framework executables and embedded dynamic libraries. Each selected native component gets its own JSON and Markdown report, with recognized functions, approximate pseudocode, call edges and string clues when Ghidra can recover them.
-- Exposes analysis, report search, feature-map, native-decompile and IPA-source discovery tools through an MCP stdio server.
+- Optionally uses local Ghidra for bounded native pseudocode extraction. On Ghidra installations with PyGhidra, it uses the CPython script runtime and runs a pre-analysis script to disable two expensive Objective-C analyzers that have caused headless timeouts.
+- Delegates generic native investigation to upstream REA when installed, including its documented CLI operations for binary analysis, search, function dossiers, decompilation, xrefs, traces and instruction inspection.
+- Exposes package analysis and REA-backed native investigation through an MCP stdio server, so an agent can follow evidence instead of relying on a one-shot report.
 - Provides a catalog of external IPA-source and release-discovery links. It never hosts, mirrors, installs, or automatically downloads IPA binaries.
 - Produces reproducible `report.json` and `REPORT.md` output while recording scan coverage and limitations.
 
@@ -46,7 +47,8 @@ The intended workflow is **decompile → understand → recreate a function for 
 
 - Python 3.10 or newer.
 - macOS is the primary development host. File-based static inspection also uses Python's standard library on other operating systems.
-- Ghidra is optional. Without it, package inventory and the built-in Mach-O parser still work; the native pseudocode command needs `analyzeHeadless` from an installed Ghidra distribution.
+- Ghidra is optional for package inventory. Native inspection can use upstream REA with an installed/configured Ghidra, Hopper or IDA provider; the bundled fallback uses a local Ghidra installation.
+- Upstream REA is installed separately and currently requires Node.js 22.19+, 24.11+, or 26+. Native-provider setup is documented in [REA's README](https://github.com/morluto/rea). `ios-re-agent doctor` warns when Node is below these versions.
 
 Runtime dependencies are standard-library only. Development extras install `pytest` and `ruff`.
 
@@ -95,9 +97,11 @@ reports/my-app/
 
 The Markdown report is a readable overview. The JSON report is the canonical machine-readable result for scripts and agent investigation. Network entries include `source_path`, `byte_offset`, a classification and a reminder that static string matches do not prove a request occurs.
 
-## 2. Native decompilation with Ghidra
+## 2. Native analysis with upstream REA or the Ghidra fallback
 
-Install Ghidra from its official project/release channels, then set `GHIDRA_HOME` to the Ghidra installation directory. Confirm `support/analyzeHeadless` exists and is executable:
+The `decompile` command uses `--backend auto` by default: it prefers upstream REA if the `rea` CLI is installed, and otherwise uses the bundled Ghidra adapter. You can select `--backend rea` or `--backend ghidra` explicitly.
+
+For the standalone Ghidra fallback, install Ghidra from its official project/release channels. The tool detects common Homebrew layouts; if needed, set `GHIDRA_HOME` to either the Ghidra distribution root or its `Ghidra` application directory. Confirm `support/analyzeHeadless` exists:
 
 ```bash
 export GHIDRA_HOME="/path/to/ghidra"
@@ -109,6 +113,7 @@ Start with an authorized sample app:
 ```bash
 ios-re-agent decompile "/path/to/authorized-app.ipa" \
   --out "reports/my-app-native" \
+  --backend ghidra \
   --max-binaries 100 \
   --timeout 900
 ```
@@ -128,7 +133,51 @@ reports/my-app-native/
 
 Ghidra may fail to recover functions or pseudocode for encrypted, obfuscated, optimized, stripped or unsupported code. Native decompilation is approximate; it is not the original Swift/Objective-C source. The adapter does not bypass app encryption, code signing or device protections. No target code is executed. This command has not yet been validated against every Ghidra release or every iOS binary type; please report compatibility issues with reproducible synthetic or authorized fixtures.
 
-## 3. Ask an AI agent to investigate the app
+## 3. Use upstream REA for interactive native reverse engineering
+
+The project deliberately delegates generic native reverse-engineering operations to [REA](https://github.com/morluto/rea), rather than reimplementing its Ghidra/Hopper/IDA bridges. The iOS layer discovers executable components inside an IPA, stages bounded Mach-O files temporarily, and records REA evidence per component.
+
+Install upstream REA separately using its supported Node.js version, then configure a provider according to the upstream documentation:
+
+```bash
+npm install --global rea-agents
+rea --help
+rea providers --json
+rea capabilities --json
+rea doctor --provider ghidra --json
+```
+
+You can pass any REA CLI command through the project, or run a native investigation directly:
+
+```bash
+# Pass through to the full upstream REA CLI.
+ios-re-agent rea -- analyze "/path/to/native-binary" --provider ghidra --json
+
+# Use the structured native-operation wrapper.
+ios-re-agent rea-native analyze "/path/to/native-binary" --provider ghidra
+ios-re-agent rea-native search "/path/to/native-binary" "notification" --provider ghidra
+ios-re-agent rea-native function "/path/to/native-binary" "0x100001000" --provider ghidra
+ios-re-agent rea-native decompile "/path/to/native-binary" "0x100001000" --provider ghidra
+ios-re-agent rea-native xrefs "/path/to/native-binary" "0x100001000" --provider ghidra
+ios-re-agent rea-native trace "/path/to/native-binary" "notification" --provider ghidra
+ios-re-agent rea-native instructions "/path/to/native-binary" "0x100001000" --provider ghidra
+```
+
+Analyze the native components from an IPA as a batch:
+
+```bash
+ios-re-agent rea-ipa "/path/to/authorized-app.ipa" \
+  --out "reports/rea-native-analysis" \
+  --provider ghidra \
+  --max-binaries 20 \
+  --timeout 300
+```
+
+This writes `REA_NATIVE_ANALYSIS.md`, `rea-native-analysis.json`, and per-component evidence under `modules/`. `rea-evidence.json` preserves the upstream JSON response; `rea-command.json` records command status and diagnostics. Output schemas can change with upstream REA versions, and a timeout or failed provider remains a failure rather than a completed analysis. The command inventories declared bundle executables and embedded `.dylib` files; it does not guarantee every Mach-O in every vendor-specific bundle layout is found.
+
+For agent integration, upstream REA's own MCP server exposes its full tool catalog. Register it as a separate MCP server using the instructions in [REA's setup guide](https://github.com/morluto/rea/blob/main/docs/installation.md). This project's MCP server also exposes `rea_native_operation` and `analyze_ios_with_rea` if you prefer the iOS workflow in one server.
+
+## 4. Ask an AI agent to investigate the app
 
 The MCP server exposes these tools:
 
@@ -137,7 +186,9 @@ The MCP server exposes these tools:
 - `search_analysis_report` — find relevant functions, symbols, strings, URLs and evidence paths in a report.
 - `get_feature_map` — return feature hypotheses and their supporting evidence.
 - `list_ipa_sources` / `search_ipa_sources` — search the outbound source catalog.
-- `discover_github_ipa_releases` — query GitHub's public API for repositories with licensed source metadata and `.ipa` release assets; this returns links only and does not verify that the binary is licensed for redistribution.
+- `discover_github_ipa_releases` — query GitHub's public API for repositories with `.ipa` release assets; this returns links only and does not verify redistribution rights.
+- `rea_native_operation` — call upstream REA for native analysis, search, function dossiers, decompilation, xrefs, traces and instructions.
+- `analyze_ios_with_rea` — discover IPA/app Mach-O components and preserve per-component upstream REA evidence.
 
 Start the server manually to test its availability:
 
@@ -145,7 +196,7 @@ Start the server manually to test its availability:
 ios-re-agent mcp
 ```
 
-The command uses JSON-RPC over standard input/output; it is meant to be launched by an MCP-compatible client, not used as an interactive shell command.
+The command uses JSON-RPC over standard input/output; it is meant to be launched by an MCP-compatible client, not used as an interactive shell command. To expose REA's complete upstream MCP tool catalog, register the separate `rea` server too (see the integration instructions above); this project's adapter only wraps its documented native CLI operations.
 
 Example generic MCP client configuration (replace the paths with absolute paths on your Mac):
 
@@ -166,7 +217,7 @@ Use the configuration location documented by your MCP client, restart it, then a
 
 An AI agent can organize findings and choose follow-up queries. It should not treat a feature-map label as proof of a working feature. Dynamic behavior still requires a separately designed, explicitly authorized simulator/device workflow, which is not included in this release.
 
-## 4. Find external sources for IPA files
+## 5. Find external sources for IPA files
 
 List or search the configured catalog:
 
@@ -214,4 +265,4 @@ See [`docs/OPEN_SOURCE_LAUNCH.md`](docs/OPEN_SOURCE_LAUNCH.md) for release, docu
 
 ## License
 
-MIT. See [LICENSE](LICENSE). Ghidra and any other optional tool retain their own licenses and are not bundled with this project.
+MIT. See [LICENSE](LICENSE). Upstream REA is a separate MIT-licensed project with its own license, release lifecycle and third-party notices; it is not vendored here. Ghidra and other analysis providers retain their own licenses and are not bundled with this project.

@@ -13,6 +13,7 @@ from . import __version__
 from .analyzer import analyze
 from .ghidra import decompile_artifact
 from .ipa_sources import discover_github_ipa_releases, load_sources, search_sources
+from .rea_backend import analyze_ipa_with_rea, find_rea_cli, run_native_operation
 from .report import write_json, write_markdown
 
 SERVER_INFO = {"name": "ios-re-agent", "version": __version__}
@@ -25,8 +26,8 @@ TOOLS = [
     },
     {
         "name": "decompile_ios_native_code",
-        "description": "Use an already-installed Ghidra headless analyzer to statically decompile an authorized IPA's main executable, .app executable or Mach-O file. Requires Ghidra; does not bypass encryption or execute target code.",
-        "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "out_dir": {"type": "string"}, "ghidra_home": {"type": "string"}, "timeout_seconds": {"type": "integer", "minimum": 30, "maximum": 3600}, "max_binaries": {"type": "integer", "minimum": 1, "maximum": 250}}, "required": ["path", "out_dir"], "additionalProperties": False},
+        "description": "Statically analyze native components from an authorized IPA/.app or Mach-O binary. Prefers upstream REA when installed; otherwise uses the bundled Ghidra adapter. Does not execute target code or bypass protections.",
+        "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "out_dir": {"type": "string"}, "ghidra_home": {"type": "string"}, "backend": {"type": "string", "enum": ["auto", "rea", "ghidra"], "default": "auto"}, "provider": {"type": "string", "enum": ["ghidra", "hopper", "ida"], "default": "ghidra"}, "timeout_seconds": {"type": "integer", "minimum": 30, "maximum": 3600}, "max_binaries": {"type": "integer", "minimum": 1, "maximum": 250}}, "required": ["path", "out_dir"], "additionalProperties": False},
     },
     {
         "name": "search_analysis_report",
@@ -52,6 +53,16 @@ TOOLS = [
         "name": "discover_github_ipa_releases",
         "description": "Search public GitHub repository metadata and release assets for IPA files; returns external links only. This sends the search query to GitHub and does not download binaries.",
         "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "max_repositories": {"type": "integer", "minimum": 1, "maximum": 20}}, "required": ["query"], "additionalProperties": False},
+    },
+    {
+        "name": "rea_native_operation",
+        "description": "Call upstream REA's native-analysis CLI for an authorized local Mach-O binary or supported .app: analyze, search, function dossier, decompile, xrefs, trace, or instructions. Requires rea-agents and a configured native provider. Full upstream JSON evidence is preserved.",
+        "inputSchema": {"type": "object", "properties": {"operation": {"type": "string", "enum": ["analyze", "search", "function", "decompile", "xrefs", "trace", "instructions"]}, "target": {"type": "string", "description": "Absolute path to a native Mach-O executable or supported .app bundle."}, "query": {"type": "string", "description": "Required for search/trace, function name/address, or address for decompile/xrefs/instructions."}, "provider": {"type": "string", "enum": ["ghidra", "hopper", "ida"], "default": "ghidra"}, "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600, "default": 300}}, "required": ["operation", "target"], "additionalProperties": False},
+    },
+    {
+        "name": "analyze_ios_with_rea",
+        "description": "Inventory an authorized IPA/.app, find embedded native Mach-O executables/libraries, then call upstream REA's native analysis for each selected component. Saves the full per-component REA JSON evidence and a manifest; does not execute the target app or bypass protections.",
+        "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "out_dir": {"type": "string"}, "provider": {"type": "string", "enum": ["ghidra", "hopper", "ida"], "default": "ghidra"}, "timeout_seconds": {"type": "integer", "minimum": 30, "maximum": 3600, "default": 300}, "max_binaries": {"type": "integer", "minimum": 1, "maximum": 250, "default": 20}}, "required": ["path", "out_dir"], "additionalProperties": False},
     },
 ]
 
@@ -114,7 +125,18 @@ def _call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         write_markdown(report, markdown_path)
         return {"input": report.get("input"), "app": report.get("app", {}), "report_json": str(json_path.resolve()), "report_markdown": str(markdown_path.resolve()), "framework_count": len(report.get("inventory", {}).get("frameworks_and_dynamic_libraries", [])), "features": report.get("feature_map", []), "limitations": report.get("limitations", [])}
     if name == "decompile_ios_native_code":
-        return decompile_artifact(arguments["path"], arguments["out_dir"], ghidra_home=arguments.get("ghidra_home"), timeout=int(arguments.get("timeout_seconds", 900)), max_binaries=int(arguments.get("max_binaries", 100)), show_progress=False)
+        backend = str(arguments.get("backend", "auto"))
+        provider = str(arguments.get("provider", "ghidra"))
+        timeout = int(arguments.get("timeout_seconds", 900))
+        max_binaries = int(arguments.get("max_binaries", 100))
+        use_rea = backend == "rea" or (backend == "auto" and find_rea_cli() is not None)
+        if use_rea:
+            if find_rea_cli() is None:
+                raise RuntimeError("Upstream REA is required for backend=rea; install rea-agents first.")
+            return analyze_ipa_with_rea(arguments["path"], arguments["out_dir"], provider=provider, timeout=timeout, max_binaries=max_binaries)
+        if backend not in {"auto", "ghidra"}:
+            raise ValueError(f"Unsupported native backend: {backend}")
+        return decompile_artifact(arguments["path"], arguments["out_dir"], ghidra_home=arguments.get("ghidra_home"), timeout=timeout, max_binaries=max_binaries, show_progress=False)
     if name == "search_analysis_report":
         report = _load_report(str(arguments["report_path"]))
         limit = max(1, min(int(arguments.get("limit", 20)), 50))
@@ -129,6 +151,20 @@ def _call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     if name == "discover_github_ipa_releases":
         rows = discover_github_ipa_releases(str(arguments["query"]), max_repositories=int(arguments.get("max_repositories", 8)))
         return {"results": rows, "notice": "The search query was sent to GitHub's public API. Links only; assets were not downloaded or verified."}
+    if name == "rea_native_operation":
+        return run_native_operation(
+            str(arguments["operation"]), str(arguments["target"]),
+            query=arguments.get("query"),
+            provider=str(arguments.get("provider", "ghidra")),
+            timeout=int(arguments.get("timeout_seconds", 300)),
+        )
+    if name == "analyze_ios_with_rea":
+        return analyze_ipa_with_rea(
+            str(arguments["path"]), str(arguments["out_dir"]),
+            provider=str(arguments.get("provider", "ghidra")),
+            timeout=int(arguments.get("timeout_seconds", 300)),
+            max_binaries=int(arguments.get("max_binaries", 20)),
+        )
     raise ValueError(f"Unknown tool: {name}")
 
 
@@ -139,7 +175,7 @@ def _dispatch(message: dict[str, Any]) -> dict[str, Any] | None:
     if method == "notifications/initialized":
         return None
     if method == "initialize":
-        return {"jsonrpc": "2.0", "id": request_id, "result": {"protocolVersion": str(message.get("params", {}).get("protocolVersion", "2024-11-05")), "capabilities": {"tools": {}}, "serverInfo": SERVER_INFO, "instructions": "Use only authorized artifacts. Treat findings as static evidence, never as proof of runtime behavior. Ask before invoking online IPA discovery; it sends a query to GitHub."}}
+        return {"jsonrpc": "2.0", "id": request_id, "result": {"protocolVersion": str(message.get("params", {}).get("protocolVersion", "2024-11-05")), "capabilities": {"tools": {}}, "serverInfo": SERVER_INFO, "instructions": "Use only authorized artifacts. Treat findings as static evidence, never as proof of runtime behavior. Native REA tools require the upstream rea-agents CLI and a configured Ghidra, Hopper or IDA provider. Ask before invoking online IPA discovery; it sends a query to GitHub."}}
     if method == "ping":
         return {"jsonrpc": "2.0", "id": request_id, "result": {}}
     if method == "tools/list":

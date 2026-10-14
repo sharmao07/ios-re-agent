@@ -67,7 +67,7 @@ def discover_github_ipa_releases(
     def get_json(url: str) -> Any:
         request = urllib.request.Request(
             url,
-            headers={"Accept": "application/vnd.github+json", "User-Agent": "ios-re-agent/0.2.0"},
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "ios-re-agent/0.3.0"},
         )
         try:
             with request_open(request, timeout=timeout) as response:

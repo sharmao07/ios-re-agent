@@ -1,6 +1,6 @@
 # Open-source launch checklist
 
-Use this checklist before tagging a public release. Version 0.2.0 is a preview until host-specific Ghidra tests and release checks are complete.
+Use this checklist before tagging a public release. Version 0.3.0 is a preview until the Ghidra fallback and upstream REA bridge are end-to-end tested on representative authorized iOS binaries.
 
 ## 1. Repository hygiene
 
@@ -32,13 +32,14 @@ If `python -m build` isn't available, install the `build` development tool in th
 - [ ] Confirm source paths/byte offsets point to the expected fixture locations.
 - [ ] Start MCP from the client configuration and verify `tools/list` and local tools.
 - [ ] If Ghidra is installed, decompile a redistributable test binary and an authorized sample `.app`; inspect root and per-module reports.
+- [ ] If upstream REA is installed, run `rea doctor --provider ghidra --json`, then test `rea-native analyze` and `rea-ipa` against a redistributable sample; inspect raw per-component evidence.
 - [ ] Test Ghidra with an encrypted/unreadable or unsupported binary and verify the report says what failed instead of implying success.
 - [ ] Confirm `sources discover` sends a query to GitHub only when explicitly invoked and never downloads an IPA asset.
 
 ## 4. Documentation and scope
 
 - [ ] Make the README install instructions work in a fresh virtual environment.
-- [ ] Document supported Python/Ghidra versions based on tests, not guesses.
+- [ ] Document supported Python/Ghidra versions based on tests, not guesses, and point out that upstream REA requires a supported Node.js runtime.
 - [ ] State that decompiler pseudocode is approximate and cannot guarantee full original source recovery.
 - [ ] Clearly label candidate network indicators and feature hypotheses.
 - [ ] Review `SECURITY.md`, `CONTRIBUTING.md`, `LICENSE`, `CHANGELOG.md` and `docs/ROADMAP.md`.

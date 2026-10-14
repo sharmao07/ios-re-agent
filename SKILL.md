@@ -50,15 +50,29 @@ Read `REPORT.md`, then query `report.json` for details. Start with:
 - Feature hypotheses with confidence and evidence paths.
 - Scan coverage and limitations.
 
-## 4. Optional native decompilation
+## 4. Native investigation through upstream REA
 
-If the user has installed Ghidra, run the doctor check and then:
+For the broad native reverse-engineering toolset, prefer the upstream REA CLI/MCP integration. It requires `rea-agents` plus a configured local Ghidra, Hopper or IDA provider. Follow upstream setup instructions; this repository does not vendor the REA engine.
+
+For a single binary, use the upstream native operations:
+
+```bash
+ios-re-agent rea-native analyze "/absolute/path/to/native-binary" --provider ghidra
+ios-re-agent rea-native search "/absolute/path/to/native-binary" "notification" --provider ghidra
+ios-re-agent rea-native function "/absolute/path/to/native-binary" "0x100001000" --provider ghidra
+ios-re-agent rea-native decompile "/absolute/path/to/native-binary" "0x100001000" --provider ghidra
+ios-re-agent rea-native xrefs "/absolute/path/to/native-binary" "0x100001000" --provider ghidra
+ios-re-agent rea-native trace "/absolute/path/to/native-binary" "notification" --provider ghidra
+ios-re-agent rea-native instructions "/absolute/path/to/native-binary" "0x100001000" --provider ghidra
+```
+
+For an IPA, use `ios-re-agent rea-ipa` to stage recognized app, extension, framework and dylib Mach-O components and save upstream JSON evidence per component. The app is never executed. The direct Ghidra fallback remains available:
 
 ```bash
 ios-re-agent decompile "/absolute/path/to/authorized.ipa" --out "reports/app-native" --max-binaries 100
 ```
 
-This uses `analyzeHeadless` over recognized Mach-O executables and embedded dylibs that can be found via package/bundle metadata. Each component report may contain function names, approximate pseudocode, direct call edges and recovered strings. It is not guaranteed to recover every component or original source. Respect size and component limits. Never invoke target binaries.
+Current Ghidra installations with PyGhidra use the CPython exporter and a pre-analysis script that disables two expensive Objective-C analyzers. The fallback script is for older Jython-enabled Ghidra installations. Neither path guarantees complete decompilation; never invoke target binaries.
 
 ## 5. Use MCP for repeated investigation
 
@@ -68,7 +82,7 @@ The CLI can start a local stdio MCP server:
 ios-re-agent mcp
 ```
 
-Tools include `analyze_ios_artifact`, `decompile_ios_native_code`, `search_analysis_report`, `get_feature_map`, `list_ipa_sources`, `search_ipa_sources`, and `discover_github_ipa_releases`.
+Tools include `analyze_ios_artifact`, `decompile_ios_native_code`, `search_analysis_report`, `get_feature_map`, `list_ipa_sources`, `search_ipa_sources`, `discover_github_ipa_releases`, `rea_native_operation`, and `analyze_ios_with_rea`.
 
 Recommended investigation loop:
 

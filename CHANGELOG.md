@@ -2,6 +2,16 @@
 
 Notable project changes are documented here. Until a stable release, changes may be breaking.
 
+## 0.3.0 — 2026-10-14 (preview)
+
+- Add a thin bridge to upstream REA's documented native CLI instead of attempting to reimplement its full native-analysis toolset.
+- Add `rea-native` operation wrapper, transparent `rea` CLI forwarding, and `rea-ipa` component-by-component analysis.
+- Add MCP tools for upstream REA native operations and batch IPA native analysis with per-component evidence preservation.
+- Use PyGhidra for Ghidra 12 installations and keep a Jython exporter fallback for older installations.
+- Add a Java pre-analysis script to disable costly Objective-C analyzers before automatic analysis, improve Homebrew Ghidra detection and terminate child process groups on timeout.
+- Stream IPA Mach-O members to disk and continue candidate selection until the requested number of valid Mach-O components are staged.
+- Add tests for the REA bridge, evidence preservation, Homebrew launcher layout, PyGhidra arguments and MCP tool registration.
+
 ## 0.2.0 — 2026-10-14 (preview)
 
 - Improve URL validation and classify likely service endpoints separately from reference/static URLs.

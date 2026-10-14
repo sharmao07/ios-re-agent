@@ -6,6 +6,7 @@ import os
 import plistlib
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,8 @@ MAX_EXECUTABLE_BYTES = 768 * 1024 * 1024
 MAX_TOTAL_NATIVE_BYTES = 2 * 1024 * 1024 * 1024
 DEFAULT_MAX_BINARIES = 100
 SCRIPT_PATH = Path(__file__).resolve().parent / "data" / "ExportAnalysis.py"
+JYTHON_SCRIPT_PATH = Path(__file__).resolve().parent / "data" / "ExportAnalysisJython.py"
+PRE_ANALYSIS_SCRIPT_PATH = Path(__file__).resolve().parent / "data" / "DisableObjcAnalyzers.java"
 MACHO_MAGICS = {b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca", b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca"}
 
 
@@ -27,6 +30,12 @@ class GhidraError(RuntimeError):
 
 
 def find_analyze_headless(ghidra_home: str | Path | None = None) -> Path | None:
+    """Find Ghidra's headless launcher across common archive and Homebrew layouts.
+
+    ``GHIDRA_HOME`` is variously set to the extracted install root, its ``Ghidra``
+    application subdirectory, or Homebrew's ``libexec`` directory. Support all
+    three instead of assuming a single filesystem shape.
+    """
     candidates: list[Path] = []
     roots: list[Path] = []
     if ghidra_home:
@@ -37,16 +46,42 @@ def find_analyze_headless(ghidra_home: str | Path | None = None) -> Path | None:
     if path_hit:
         candidates.append(Path(path_hit))
     for root in roots:
-        candidates.extend([root / "support" / "analyzeHeadless", root / "support" / "analyzeHeadless.bat"])
-    for root in [Path("/Applications"), Path.home() / "Applications", Path.home()]:
+        candidates.extend([
+            root / "support" / "analyzeHeadless",
+            root / "support" / "analyzeHeadless.bat",
+            root.parent / "support" / "analyzeHeadless",
+            root.parent / "support" / "analyzeHeadless.bat",
+            root.parent.parent / "support" / "analyzeHeadless",
+            root.parent.parent / "support" / "analyzeHeadless.bat",
+            root / "Ghidra" / "support" / "analyzeHeadless",
+        ])
+    for pattern_root in (Path("/Applications"), Path.home() / "Applications", Path.home()):
         try:
-            candidates.extend(root.glob("ghidra_*/support/analyzeHeadless"))
-            candidates.extend(root.glob("ghidra_*/support/analyzeHeadless.bat"))
+            candidates.extend(pattern_root.glob("ghidra_*/support/analyzeHeadless"))
+            candidates.extend(pattern_root.glob("ghidra_*/support/analyzeHeadless.bat"))
+            candidates.extend(pattern_root.glob("ghidra_*/libexec/support/analyzeHeadless"))
         except OSError:
             pass
+    # Homebrew's linked formula and Cellar versioned install.
+    for pattern in (
+        "/opt/homebrew/opt/ghidra/libexec/support/analyzeHeadless",
+        "/opt/homebrew/Cellar/ghidra/*/libexec/support/analyzeHeadless",
+        "/usr/local/opt/ghidra/libexec/support/analyzeHeadless",
+        "/usr/local/Cellar/ghidra/*/libexec/support/analyzeHeadless",
+    ):
+        import glob
+        candidates.extend(Path(path) for path in glob.glob(pattern))
+    seen: set[Path] = set()
     for candidate in candidates:
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return candidate.resolve()
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if resolved.is_file() and os.access(resolved, os.X_OK):
+            return resolved
     return None
 
 
@@ -109,8 +144,11 @@ def _stage_app_bundle(source: Path, staging: Path, max_binaries: int) -> list[di
         candidates[relative] = (binary, priority)
     total = [0]
     staged: list[dict[str, Any]] = []
-    for index, (relative, (candidate, _priority)) in enumerate(sorted(candidates.items(), key=lambda item: (item[1][1], item[0]))[:max_binaries]):
-        safe_name = f"{index:03d}_{re.sub(r'[^A-Za-z0-9_.-]+', '_', Path(relative).name)}"
+    ordered = sorted(candidates.items(), key=lambda item: (item[1][1], item[0]))
+    for relative, (candidate, _priority) in ordered:
+        if len(staged) >= max_binaries:
+            break
+        safe_name = f"{len(staged):03d}_{re.sub(r'[^A-Za-z0-9_.-]+', '_', Path(relative).name)}"
         item = _stage_file(candidate, staging / safe_name, relative, total)
         if item:
             staged.append(item)
@@ -154,8 +192,10 @@ def _stage_ipa(source: Path, staging: Path, max_binaries: int) -> list[dict[str,
         for path_name, item in by_name.items():
             if path_name.lower().endswith(".dylib"):
                 candidates.setdefault(path_name, (item, 3))
-        ordered = sorted(candidates.items(), key=lambda row: (row[1][1], row[0]))[:max_binaries]
-        for index, (path_name, (entry, _priority)) in enumerate(ordered):
+        ordered = sorted(candidates.items(), key=lambda row: (row[1][1], row[0]))
+        for path_name, (entry, _priority) in ordered:
+            if len(staged) >= max_binaries:
+                break
             if entry.file_size < 4 or entry.file_size > MAX_EXECUTABLE_BYTES or total_bytes + entry.file_size > MAX_TOTAL_NATIVE_BYTES:
                 continue
             try:
@@ -165,18 +205,33 @@ def _stage_ipa(source: Path, staging: Path, max_binaries: int) -> list[dict[str,
                 continue
             if header not in MACHO_MAGICS:
                 continue
-            try:
-                data = archive.read(entry)
-            except (OSError, RuntimeError, zipfile.BadZipFile):
-                continue
-            if data[:4] not in MACHO_MAGICS:
-                continue
-            safe_name = f"{index:03d}_{re.sub(r'[^A-Za-z0-9_.-]+', '_', Path(path_name).name)}"
+            safe_name = f"{len(staged):03d}_{re.sub(r'[^A-Za-z0-9_.-]+', '_', Path(path_name).name)}"
             output = staging / safe_name
             output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_bytes(data)
-            total_bytes += len(data)
-            staged.append({"source_path": path_name, "staged_path": output, "size_bytes": len(data)})
+            try:
+                written = 0
+                with archive.open(entry, "r") as source_stream, output.open("wb") as destination_stream:
+                    first = source_stream.read(4)
+                    if first not in MACHO_MAGICS:
+                        continue
+                    destination_stream.write(first)
+                    written += len(first)
+                    while True:
+                        chunk = source_stream.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        written += len(chunk)
+                        if written > MAX_EXECUTABLE_BYTES or total_bytes + written > MAX_TOTAL_NATIVE_BYTES:
+                            raise GhidraError("Native component exceeded configured staging limits while reading IPA.")
+                        destination_stream.write(chunk)
+                if written != entry.file_size:
+                    output.unlink(missing_ok=True)
+                    continue
+            except (OSError, RuntimeError, zipfile.BadZipFile, GhidraError):
+                output.unlink(missing_ok=True)
+                continue
+            total_bytes += written
+            staged.append({"source_path": path_name, "staged_path": output, "size_bytes": written})
     return staged
 
 
@@ -215,6 +270,39 @@ def _write_native_markdown(payload: dict[str, Any], path: Path) -> None:
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _run_headless(command: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
+    """Run a Ghidra launch and reap its process group if it exceeds the timeout."""
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=(os.name == "posix"),
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        if os.name == "posix":
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                stdout, stderr = process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                stdout, stderr = process.communicate()
+        else:
+            process.kill()
+            stdout, stderr = process.communicate()
+        detail = (stderr or stdout or str(exc.stderr or exc.stdout or ""))[-4000:]
+        raise GhidraError(f"Ghidra timed out after {timeout}s: {detail}") from exc
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
 def _run_one(headless: Path, binary: Path, source_path: str, output_dir: Path, timeout: int, index: int) -> dict[str, Any]:
     module_dir = output_dir / "modules" / _module_slug(index, binary.name)
     module_dir.mkdir(parents=True, exist_ok=True)
@@ -223,14 +311,39 @@ def _run_one(headless: Path, binary: Path, source_path: str, output_dir: Path, t
         project_dir = Path(temporary) / "project"
         project_dir.mkdir()
         project_name = "ios_re_agent_module"
-        command = [str(headless), str(project_dir), project_name, "-import", str(binary), "-scriptPath", str(SCRIPT_PATH.parent), "-postScript", SCRIPT_PATH.name, str(raw_path), "-deleteProject"]
-        try:
-            completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
-        except subprocess.TimeoutExpired as exc:
-            raise GhidraError(f"Ghidra timed out after {timeout}s on {source_path}: {str(exc.stderr or '')[-1500:]}") from exc
+        pyghidra = headless.parent / "pyghidraRun"
+        use_pyghidra = pyghidra.is_file() and os.access(pyghidra, os.X_OK)
+        launcher = pyghidra if use_pyghidra else headless
+        export_script = SCRIPT_PATH if use_pyghidra else JYTHON_SCRIPT_PATH
+        command = [str(launcher)]
+        if use_pyghidra:
+            # pyghidraRun's first positional argument is the Ghidra install
+            # directory. It then forwards the remaining arguments to
+            # AnalyzeHeadless when --headless is selected.
+            install_dir = pyghidra.parent.parent
+            command.extend([str(install_dir), "--headless"])
+        command.extend([
+            str(project_dir), project_name,
+            "-import", str(binary),
+            "-scriptPath", str(SCRIPT_PATH.parent),
+            # This must run before auto-analysis. The post-script alone was too late
+            # and allowed expensive Obj-C analyzers to consume the entire timeout.
+            "-preScript", PRE_ANALYSIS_SCRIPT_PATH.name,
+            "-postScript", export_script.name, str(raw_path),
+            "-deleteProject",
+        ])
+        completed = _run_headless(command, timeout)
+        log_path = module_dir / "ghidra.log"
+        log_text = "[stdout]\n" + (completed.stdout or "") + "\n[stderr]\n" + (completed.stderr or "")
+        encoded_log = log_text.encode("utf-8", errors="replace")
+        if len(encoded_log) > 4 * 1024 * 1024:
+            log_text = "[log truncated to final 4 MiB]\n" + encoded_log[-(4 * 1024 * 1024):].decode("utf-8", errors="replace")
+        log_path.write_text(log_text, encoding="utf-8")
         if completed.returncode != 0 or not raw_path.is_file():
-            detail = (completed.stderr or completed.stdout or "No diagnostic output")[-4000:]
-            raise GhidraError(f"Ghidra failed on {source_path} (exit={completed.returncode}):\n{detail}")
+            detail = (completed.stderr or completed.stdout or "No diagnostic output")[-5000:]
+            raise GhidraError(
+                f"Ghidra failed on {source_path} (exit={completed.returncode}); see {log_path}:\n{detail}"
+            )
     try:
         payload = json.loads(raw_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -239,8 +352,8 @@ def _run_one(headless: Path, binary: Path, source_path: str, output_dir: Path, t
         raise GhidraError(f"Ghidra output for {source_path} was not a JSON object.")
     payload["input_path"] = source_path
     payload["binary_name"] = binary.name
-    payload["tool"] = {"name": "ios-re-agent-ghidra-adapter", "version": "0.2.0"}
-    payload["limitations"] = ["Static decompilation only; target code was not executed.", "Pseudocode is generated by Ghidra and is not original source code.", "Results depend on binary readability, symbols, optimization, architecture support and Ghidra quality."]
+    payload["tool"] = {"name": "ios-re-agent-ghidra-adapter", "version": "0.3.0"}
+    payload["limitations"] = ["Static decompilation only; target code was not executed.", "Pseudocode is generated by Ghidra and is not original source code.", "Objective-C message and type-metadata analyzers are disabled to avoid known headless timeouts; their specialized findings may therefore be absent.", "Results depend on binary readability, symbols, optimization, architecture support and Ghidra quality."]
     raw_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     _write_native_markdown(payload, module_dir / "NATIVE_ANALYSIS.md")
     return {
@@ -249,6 +362,7 @@ def _run_one(headless: Path, binary: Path, source_path: str, output_dir: Path, t
         "size_bytes": binary.stat().st_size,
         "report_json": str(raw_path.relative_to(output_dir)),
         "report_markdown": str((module_dir / "NATIVE_ANALYSIS.md").relative_to(output_dir)),
+        "log_path": str(log_path.relative_to(output_dir)),
         "function_count": payload.get("function_count", 0),
         "decompiled_count": payload.get("decompiled_count", 0),
         "string_count": payload.get("string_count", 0),
@@ -281,6 +395,10 @@ def decompile_artifact(
         raise GhidraError("Ghidra's analyzeHeadless was not found. Install Ghidra and set GHIDRA_HOME to its installation directory.")
     if not SCRIPT_PATH.is_file():
         raise GhidraError(f"Bundled Ghidra export script is missing: {SCRIPT_PATH}")
+    if not JYTHON_SCRIPT_PATH.is_file():
+        raise GhidraError(f"Bundled Jython fallback script is missing: {JYTHON_SCRIPT_PATH}")
+    if not PRE_ANALYSIS_SCRIPT_PATH.is_file():
+        raise GhidraError(f"Bundled Ghidra pre-analysis script is missing: {PRE_ANALYSIS_SCRIPT_PATH}")
     output_dir = Path(out_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -315,9 +433,9 @@ def decompile_artifact(
 
     aggregate = {
         "schema_version": "1.0",
-        "tool": {"name": "ios-re-agent-ghidra-adapter", "version": "0.2.0"},
+        "tool": {"name": "ios-re-agent-ghidra-adapter", "version": "0.3.0"},
         "input_name": source.name,
-        "backend": "Ghidra headless",
+        "backend": "Ghidra headless (Objective-C message/type analyzers disabled)",
         "components_selected": len(candidates),
         "components_analyzed": len(summaries),
         "components_failed": len(failures),

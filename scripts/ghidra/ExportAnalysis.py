@@ -1,6 +1,6 @@
-# Ghidra headless post-script. Kept compatible with Ghidra's Jython 2.7 runtime.
-# @category iOS-RE Agent
-# @runtime Jython
+#@runtime PyGhidra
+#@category iOS-RE Agent
+# Ghidra 12 headless post-script using its integrated CPython runtime.
 import json
 
 MAX_FUNCTIONS = 800
